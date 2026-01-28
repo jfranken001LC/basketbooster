@@ -1,0 +1,29 @@
+query Input {
+  cart {
+    cost {
+      subtotalAmount { amount }
+    }
+    lines {
+      id
+      quantity
+      merchandise {
+        __typename
+        ... on ProductVariant {
+          metafield(namespace: "custom", key: "loyalty_bottle_equivalent") {
+            value
+          }
+          product {
+            metafield(namespace: "custom", key: "loyalty_bottle_equivalent") {
+              value
+            }
+          }
+        }
+      }
+    }
+  }
+  discount {
+    metafield(namespace: "$app", key: "function-configuration") {
+      jsonValue
+    }
+  }
+}
