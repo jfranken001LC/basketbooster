@@ -1,6 +1,6 @@
 {
-  "name": "[Example] Discount UI extension",
-  "description": "Discount UI extension",
+  "name": "Bottle Equivalent Discount Settings",
+  "description": "Configure Bottle Equivalent triggers, discount amount, and optional cap.",
   "title": "Select which discount types to apply at checkout",
   "loading": "Loading...",
   "label": "Percentage off",
