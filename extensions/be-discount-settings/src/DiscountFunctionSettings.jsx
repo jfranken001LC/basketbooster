@@ -25,11 +25,19 @@ export default async () => {
 };
 
 function Extension() {
-  const metafield = shopify.data?.metafields?.[0]; // $app.function-configuration
+  // In Discount Function Settings extensions, Shopify exposes the discount metafields here.
+  // This array can be empty for a brand-new discount until the first save occurs.
+  const metafields = shopify.data?.metafields ?? [];
+
+  // Prefer the exact metafield if it exists already.
+  const existingConfigMetafield =
+    metafields.find((m) => m?.key === "function-configuration") ?? metafields[0];
 
   const initial = useMemo(() => {
     try {
-      const parsed = metafield?.value ? JSON.parse(metafield.value) : null;
+      const parsed = existingConfigMetafield?.value
+        ? JSON.parse(existingConfigMetafield.value)
+        : null;
 
       const triggerBE = intOrDefault(parsed?.triggerBE, DEFAULT_CONFIG.triggerBE);
       const amountPerTrigger = Math.max(
@@ -45,7 +53,7 @@ function Extension() {
     } catch {
       return DEFAULT_CONFIG;
     }
-  }, [metafield?.value]);
+  }, [existingConfigMetafield?.value]);
 
   const [triggerBE, setTriggerBE] = useState(String(initial.triggerBE));
   const [amountPerTrigger, setAmountPerTrigger] = useState(String(initial.amountPerTrigger));
@@ -60,18 +68,33 @@ function Extension() {
   async function save() {
     const config = {
       triggerBE: intOrDefault(triggerBE, DEFAULT_CONFIG.triggerBE),
-      amountPerTrigger: Math.max(0, numOrDefault(amountPerTrigger, DEFAULT_CONFIG.amountPerTrigger)),
+      amountPerTrigger: Math.max(
+        0,
+        numOrDefault(amountPerTrigger, DEFAULT_CONFIG.amountPerTrigger)
+      ),
       // 0 = no cap
       maxDiscount: Math.max(0, numOrDefault(maxDiscount, DEFAULT_CONFIG.maxDiscount)),
     };
 
-    await shopify.applyMetafieldChange({
+    // IMPORTANT:
+    // - On first save, existingConfigMetafield may be undefined.
+    // - Passing namespace: "$app" can be rejected.
+    // - The API allows namespace to be omitted; Shopify will apply the correct app-scoped metafield.
+    //   (namespace is optional for updateMetafield).  :contentReference[oaicite:1]{index=1}
+    const change = {
       type: "updateMetafield",
-      namespace: metafield?.namespace ?? "$app",
-      key: metafield?.key ?? "function-configuration",
+      key: existingConfigMetafield?.key ?? "function-configuration",
       value: JSON.stringify(config),
       valueType: "json",
-    });
+    };
+
+    // Only include a namespace if Shopify already provided the resolved namespace.
+    if (existingConfigMetafield?.namespace) {
+      change.namespace = existingConfigMetafield.namespace;
+    }
+
+    const result = await shopify.applyMetafieldChange(change);
+
   }
 
   const trigger = intOrDefault(triggerBE, DEFAULT_CONFIG.triggerBE);
@@ -127,8 +150,9 @@ function Extension() {
           ))}
 
           <s-text tone="subdued">
-            Example: If Trigger is {trigger} BE and Amount is {money(amt)}, then every {trigger} BE earns{" "}
-            {money(amt)} off. {cap > 0 ? `A cap of ${money(cap)} per order is applied.` : "No cap is applied."}
+            Example: If Trigger is {trigger} BE and Amount is {money(amt)}, then every {trigger} BE
+            earns {money(amt)} off.{" "}
+            {cap > 0 ? `A cap of ${money(cap)} per order is applied.` : "No cap is applied."}
           </s-text>
 
           <s-text tone="subdued">
@@ -156,8 +180,7 @@ function Extension() {
           </s-text>
 
           <s-text tone="subdued">
-            • Recommended mapping for store with 250ml base:{" "}
-            250ml = 1 BE, 500ml = 2 BE, 2L = 4 BE.
+            • Recommended mapping for store with 250ml base: 250ml = 1 BE, 500ml = 2 BE, 2L = 4 BE.
           </s-text>
 
           <s-text tone="subdued">
