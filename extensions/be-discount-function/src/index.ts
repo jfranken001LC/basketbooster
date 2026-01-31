@@ -20,7 +20,19 @@ function toNumber(value: unknown): number | null {
 export function cartLinesDiscountsGenerateRun(
   input: CartLinesDiscountsGenerateRunInput
 ): CartLinesDiscountsGenerateRunResult {
-  const raw = (input.discount?.metafield?.jsonValue ?? null) as any;
+  const mf = input.discount?.metafield as any;
+
+let raw: any = mf?.jsonValue ?? null;
+
+// Fallback: some contexts return JSON as a string in `value`
+if (raw == null && typeof mf?.value === "string" && mf.value.trim().length > 0) {
+  try {
+    raw = JSON.parse(mf.value);
+  } catch {
+    raw = null;
+  }
+}
+
 
   const triggerBE = Math.max(
     1,
@@ -77,7 +89,7 @@ export function cartLinesDiscountsGenerateRun(
           selectionStrategy: "FIRST",
           candidates: [
             {
-              message: "Bottle Equivalent discount",
+              message: `BE discount (trigger=${triggerBE}, amt=${amountPerTrigger}, cap=${maxDiscount})`,
               targets: [{ orderSubtotal: { excludedCartLineIds: [] } }],
               value: {
                 fixedAmount: { amount: discountAmount.toFixed(2) },

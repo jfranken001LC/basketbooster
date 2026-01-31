@@ -191,11 +191,7 @@ function Extension() {
             Optional (Variant-level BE): Create the same metafield definition under Settings → Custom data → Variants,
             set values on variants, and the function will use the Variant value first (Product is fallback).
           </s-text>
-
-          <s-text tone="subdued">
-            Important: This is an <s-text emphasis="bold">Amount off order</s-text> discount (not a shipping discount).
-            Create it in Admin → Discounts → Create discount → Amount off order → App discount.
-          </s-text>
+          
         </s-stack>
       </s-stack>
     </s-function-settings>
