@@ -2,6 +2,28 @@ import "@shopify/ui-extensions/preact";
 import { render } from "preact";
 import { useMemo, useState } from "preact/hooks";
 
+/**
+ * NOTE ON CONFIG STORAGE
+ * ----------------------
+ * The Function reads configuration from:
+ *   discount.metafield(namespace: "$app", key: "function-configuration")
+ *
+ * In Admin GraphQL, that typically resolves to a concrete app namespace like:
+ *   app--<appId>
+ *
+ * In a Discount Function Settings extension, `shopify.data.metafields` can contain
+ * BOTH the app-scoped metafield and any accidentally-created custom metafield.
+ *
+ * If we pick the wrong one (e.g., namespace="custom"), the UI will keep updating
+ * the wrong metafield and the Function will keep seeing defaults.
+ *
+ * This component:
+ *   1) Prefers reading from the app-scoped config metafield (namespace startsWith "app--")
+ *   2) Falls back to reading from a legacy custom config metafield (namespace="custom")
+ *      only to populate the form (migration convenience)
+ *   3) ALWAYS writes updates to the app-scoped namespace (namespace="$app" or existing app-- namespace)
+ */
+
 const DEFAULT_CONFIG = { triggerBE: 6, amountPerTrigger: 10, maxDiscount: 0 };
 
 const money = (n) => {
@@ -20,40 +42,58 @@ const numOrDefault = (v, d) => {
   return Number.isFinite(n) ? n : d;
 };
 
+function safeParseJson(value) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+}
+
+function isAppNamespace(ns) {
+  return typeof ns === "string" && (ns === "$app" || ns.startsWith("app--"));
+}
+
 export default async () => {
   render(<Extension />, document.body);
 };
 
 function Extension() {
-  // In Discount Function Settings extensions, Shopify exposes the discount metafields here.
-  // This array can be empty for a brand-new discount until the first save occurs.
+  // Discount Function Settings extensions expose discount metafields via shopify.data.metafields
   const metafields = shopify.data?.metafields ?? [];
 
-  // Prefer the exact metafield if it exists already.
-  const existingConfigMetafield =
-    metafields.find((m) => m?.key === "function-configuration") ?? metafields[0];
+  // The Function reads $app scope. Prefer the app-scoped metafield if present.
+  const appConfigMetafield =
+    metafields.find((m) => m?.key === "function-configuration" && isAppNamespace(m?.namespace)) ??
+    null;
+
+  // Legacy/accidental storage (common debugging artifact)
+  const customConfigMetafield =
+    metafields.find((m) => m?.key === "function-configuration" && m?.namespace === "custom") ??
+    null;
+
+  // Read config from app namespace first, else use custom namespace just to populate the form.
+  const readMetafield = appConfigMetafield ?? customConfigMetafield;
+
+  // Always write to the app namespace. If Shopify already supplied a concrete app-- namespace, use it;
+  // otherwise use "$app" (the canonical alias) so Shopify stores it in the correct app namespace.
+  const writeNamespace = appConfigMetafield?.namespace ?? "$app";
 
   const initial = useMemo(() => {
-    try {
-      const parsed = existingConfigMetafield?.value
-        ? JSON.parse(existingConfigMetafield.value)
-        : null;
+    const parsed = safeParseJson(readMetafield?.value);
 
-      const triggerBE = intOrDefault(parsed?.triggerBE, DEFAULT_CONFIG.triggerBE);
-      const amountPerTrigger = Math.max(
-        0,
-        numOrDefault(parsed?.amountPerTrigger, DEFAULT_CONFIG.amountPerTrigger)
-      );
-      const maxDiscount = Math.max(
-        0,
-        numOrDefault(parsed?.maxDiscount, DEFAULT_CONFIG.maxDiscount)
-      );
+    const triggerBE = intOrDefault(parsed?.triggerBE, DEFAULT_CONFIG.triggerBE);
+    const amountPerTrigger = Math.max(
+      0,
+      numOrDefault(parsed?.amountPerTrigger, DEFAULT_CONFIG.amountPerTrigger)
+    );
+    const maxDiscount = Math.max(0, numOrDefault(parsed?.maxDiscount, DEFAULT_CONFIG.maxDiscount));
 
-      return { triggerBE, amountPerTrigger, maxDiscount };
-    } catch {
-      return DEFAULT_CONFIG;
-    }
-  }, [existingConfigMetafield?.value]);
+    return { triggerBE, amountPerTrigger, maxDiscount };
+  }, [readMetafield?.value]);
 
   const [triggerBE, setTriggerBE] = useState(String(initial.triggerBE));
   const [amountPerTrigger, setAmountPerTrigger] = useState(String(initial.amountPerTrigger));
@@ -76,25 +116,26 @@ function Extension() {
       maxDiscount: Math.max(0, numOrDefault(maxDiscount, DEFAULT_CONFIG.maxDiscount)),
     };
 
-    // IMPORTANT:
-    // - On first save, existingConfigMetafield may be undefined.
-    // - Passing namespace: "$app" can be rejected.
-    // - The API allows namespace to be omitted; Shopify will apply the correct app-scoped metafield.
-    //   (namespace is optional for updateMetafield).  :contentReference[oaicite:1]{index=1}
+    /**
+     * CRITICAL:
+     * - DO NOT write to namespace "custom" or you'll create a config the Function never reads.
+     * - Always target the app-scoped config metafield ($app → app--<appId>).
+     */
     const change = {
       type: "updateMetafield",
-      key: existingConfigMetafield?.key ?? "function-configuration",
-      value: JSON.stringify(config),
+      namespace: writeNamespace,
+      key: "function-configuration",
       valueType: "json",
+      value: JSON.stringify(config),
     };
 
-    // Only include a namespace if Shopify already provided the resolved namespace.
-    if (existingConfigMetafield?.namespace) {
-      change.namespace = existingConfigMetafield.namespace;
-    }
+    await shopify.applyMetafieldChange(change);
 
-    const result = await shopify.applyMetafieldChange(change);
-
+    /**
+     * Optional migration hygiene:
+     * If a legacy custom config metafield exists, you can choose to delete it from Admin GraphQL
+     * (recommended) to avoid future confusion. The extension API does not currently expose deletion.
+     */
   }
 
   const trigger = intOrDefault(triggerBE, DEFAULT_CONFIG.triggerBE);
@@ -188,10 +229,8 @@ function Extension() {
           </s-text>
 
           <s-text tone="subdued">
-            Optional (Variant-level BE): Create the same metafield definition under Settings → Custom data → Variants,
-            set values on variants, and the function will use the Variant value first (Product is fallback).
+            Optional (Variant-level BE): Create the same metafield definition under Settings → Custom data → Variants.
           </s-text>
-          
         </s-stack>
       </s-stack>
     </s-function-settings>

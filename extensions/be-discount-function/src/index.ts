@@ -22,17 +22,16 @@ export function cartLinesDiscountsGenerateRun(
 ): CartLinesDiscountsGenerateRunResult {
   const mf = input.discount?.metafield as any;
 
-let raw: any = mf?.jsonValue ?? null;
+  let raw: any = mf?.jsonValue ?? null;
 
-// Fallback: some contexts return JSON as a string in `value`
-if (raw == null && typeof mf?.value === "string" && mf.value.trim().length > 0) {
-  try {
-    raw = JSON.parse(mf.value);
-  } catch {
-    raw = null;
+  // Fallback: some contexts return JSON as a string in `value`
+  if (raw == null && typeof mf?.value === "string" && mf.value.trim().length > 0) {
+    try {
+      raw = JSON.parse(mf.value);
+    } catch {
+      raw = null;
+    }
   }
-}
-
 
   const triggerBE = Math.max(
     1,
@@ -57,10 +56,17 @@ if (raw == null && typeof mf?.value === "string" && mf.value.trim().length > 0) 
   for (const line of input.cart.lines) {
     if (line.merchandise.__typename !== "ProductVariant") continue;
 
-    // Variant first; Product fallback
+    // The GraphQL query aliases metafields:
+    // - beMetafield: loyalty.bottle_equivalent  (preferred)
+    // - legacyBeMetafield: custom.loyalty_bottle_equivalent (fallback)
+    // We intentionally read via `any` so the code remains drop-in even before regenerating types.
+    const merch: any = line.merchandise as any;
+
     const beValue =
-      line.merchandise.metafield?.value ??
-      line.merchandise.product?.metafield?.value;
+      merch.beMetafield?.value ??
+      merch.legacyBeMetafield?.value ??
+      merch.product?.beMetafield?.value ??
+      merch.product?.legacyBeMetafield?.value;
 
     const be = toNumber(beValue) ?? 0;
     if (be <= 0) continue;
