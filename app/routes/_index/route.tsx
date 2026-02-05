@@ -5,7 +5,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
 
   // When Shopify Admin loads an embedded app, it appends params like:
-  // embedded=1, host, shop, session/id_token, etc. :contentReference[oaicite:5]{index=5}
+  // embedded=1, host, shop, session/id_token
   const isEmbedded =
     url.searchParams.get("embedded") === "1" ||
     url.searchParams.has("host") ||
