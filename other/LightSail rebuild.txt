@@ -1,0 +1,37 @@
+sudo systemctl stop basketbooster
+sudo systemctl stop nginx
+
+cd /var/www/basketbooster
+
+git fetch origin
+git checkout main
+git reset --hard origin/main
+git clean -fd
+
+npm ci --omit=dev --no-audit --no-fund
+npm run build
+sudo systemctl start basketbooster
+# if you stopped nginx
+sudo systemctl start nginx
+sudo systemctl status basketbooster --no-pager
+
+
+
+===
+
+If the box becomes unresponsive again: quick recovery
+
+When you can get in via the Lightsail browser SSH:
+
+# see if you had an out-of-memory kill
+dmesg | egrep -i 'killed process|oom' | tail -n 50
+
+# kill any stuck npm/node
+sudo pkill -f npm || true
+sudo pkill -f node || true
+
+
+Check disk:
+
+df -h
+du -sh /var/www/basketbooster/node_modules 2>/dev/null
