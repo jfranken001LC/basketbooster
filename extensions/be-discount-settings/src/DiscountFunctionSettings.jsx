@@ -1,389 +1,205 @@
 import "@shopify/ui-extensions/preact";
 import { render } from "preact";
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { useMemo, useState } from "preact/hooks";
 
 /**
- * Discount Function Settings UI
+ * Configuration storage (Automatic discounts)
+ * -----------------------------------------
+ * Stored on the DiscountAutomaticNode metafield:
+ *   namespace: "custom"
+ *   key: "function-configuration"
+ *   type: "json"
  *
- * Persisted configuration location (per your prior debugging):
- *   Discount*Node.metafield(namespace: "custom", key: "function-configuration")
- *
- * Why we are not using $app (brief):
- * - Discount function config is a property of the Discount node, not the App / AppInstallation.
- * - In your GraphiQL results for DiscountAutomaticNode, the app-owned metafield was null while the
- *   custom metafield contained the real JSON config.
- * - Writing to app-owned namespaces on this resource has produced namespace/key access errors for you.
- *
- * This UI extension:
- * 1) Reads existing config from the discount's custom metafield (if present)
- * 2) Creates it with defaults if missing
- * 3) Saves updates back to the same custom metafield
- *
- * Robustness:
- * - Primary: shopify.applyMetafieldChange (native function settings workflow)
- * - Fallback: direct Admin GraphQL metafieldsSet (covers edge cases where applyMetafieldChange fails)
+ * Config schema:
+ * {
+ *   triggerBE: number,
+ *   amountPerTrigger: number,
+ *   maxDiscount: number,          // 0 = no cap
+ *   showConfigInMessage: boolean  // whether to show trigger/amount/cap in the discount message
+ * }
  */
-
-const METAFIELD_NAMESPACE = "custom";
-const METAFIELD_KEY = "function-configuration";
-const METAFIELD_TYPE = "json";
 
 const DEFAULT_CONFIG = {
   triggerBE: 6,
   amountPerTrigger: 10,
-  maxDiscount: 0, // 0 = no cap
+  maxDiscount: 0,
   showConfigInMessage: false,
 };
 
-function money(n) {
+const money = (n) => {
   const num = Number(n);
   if (!Number.isFinite(num)) return "$0.00";
   return `$${num.toFixed(2)}`;
-}
+};
 
-function intOrDefault(v, d) {
+const intOrDefault = (v, d) => {
   const n = Math.floor(Number(v));
   return Number.isFinite(n) && n > 0 ? n : d;
-}
+};
 
-function numOrDefault(v, d) {
+const numOrDefault = (v, d) => {
   const n = Number(v);
-  return Number.isFinite(n) && n >= 0 ? n : d;
-}
+  return Number.isFinite(n) ? n : d;
+};
 
-function safeParseJson(text) {
-  if (typeof text !== "string" || !text.trim()) return null;
+function safeParseJson(value) {
+  if (typeof value !== "string") return null;
+  const t = value.trim();
+  if (!t) return null;
   try {
-    return JSON.parse(text);
+    return JSON.parse(t);
   } catch {
     return null;
   }
 }
 
-function getExtensionData() {
-  // Some runtimes expose shopify.data as a plain object, others as a signal-like { value }.
-  const d = shopify?.data;
-  if (!d) return null;
-  if (typeof d === "object" && d !== null && "value" in d && d.value) return d.value;
-  return d;
-}
-
-function getMetafieldsFromData(data) {
-  const mfs = data?.metafields;
-  return Array.isArray(mfs) ? mfs : [];
-}
-
-function findConfigMetafield(metafields) {
-  return (
-    metafields.find(
-      (m) => m && m.namespace === METAFIELD_NAMESPACE && m.key === METAFIELD_KEY
-    ) || null
-  );
-}
-
-async function adminGraphql(query, variables) {
-  const res = await fetch("shopify:admin/api/graphql.json", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, variables }),
-  });
-
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    return {
-      ok: false,
-      status: res.status,
-      errors: [{ message: "Network error" }],
-      data: null,
-    };
-  }
-  if (json.errors?.length) {
-    return { ok: false, status: res.status, errors: json.errors, data: json.data ?? null };
-  }
-  return { ok: true, status: res.status, errors: [], data: json.data ?? null };
-}
-
-async function fetchConfigViaGraphql(discountNodeId) {
-  if (!discountNodeId) return null;
-
-  const query = `
-    query GetDiscountConfig($id: ID!) {
-      node(id: $id) {
-        __typename
-        ... on DiscountAutomaticNode {
-          metafield(namespace: "${METAFIELD_NAMESPACE}", key: "${METAFIELD_KEY}") {
-            id
-            type
-            value
-            namespace
-            key
-          }
-        }
-        ... on DiscountCodeNode {
-          metafield(namespace: "${METAFIELD_NAMESPACE}", key: "${METAFIELD_KEY}") {
-            id
-            type
-            value
-            namespace
-            key
-          }
-        }
-      }
-    }
-  `;
-
-  const r = await adminGraphql(query, { id: discountNodeId });
-  if (!r.ok) return null;
-
-  const node = r.data?.node;
-  const mf = node?.metafield ?? null;
-  return mf && mf.namespace === METAFIELD_NAMESPACE && mf.key === METAFIELD_KEY ? mf : null;
-}
-
-async function setConfigViaGraphql(discountNodeId, cfg) {
-  const mutation = `
-    mutation SetDiscountConfig($ownerId: ID!, $value: String!) {
-      metafieldsSet(
-        metafields: [{
-          ownerId: $ownerId,
-          namespace: "${METAFIELD_NAMESPACE}",
-          key: "${METAFIELD_KEY}",
-          type: "${METAFIELD_TYPE}",
-          value: $value
-        }]
-      ) {
-        metafields { id namespace key type value }
-        userErrors { field message }
-      }
-    }
-  `;
-
-  const value = JSON.stringify(cfg);
-  const r = await adminGraphql(mutation, { ownerId: discountNodeId, value });
-
-  if (!r.ok) {
-    return { ok: false, message: (r.errors?.[0]?.message ?? "GraphQL error") };
-  }
-
-  const userErrors = r.data?.metafieldsSet?.userErrors ?? [];
-  if (userErrors.length) {
-    return { ok: false, message: userErrors.map((e) => e.message).join("; ") };
-  }
-
-  return { ok: true, metafield: r.data?.metafieldsSet?.metafields?.[0] ?? null };
-}
-
-async function applyMetafieldChange(cfg) {
-  const value = JSON.stringify(cfg);
-  return await shopify.applyMetafieldChange({
-    type: "updateMetafield",
-    namespace: METAFIELD_NAMESPACE,
-    key: METAFIELD_KEY,
-    valueType: METAFIELD_TYPE,
-    value,
-  });
-}
+export default async () => {
+  render(<Extension />, document.body);
+};
 
 function Extension() {
-  const data = getExtensionData();
+  const metafields = shopify.data?.metafields ?? [];
 
-  const dataMetafields = useMemo(() => getMetafieldsFromData(data), [data]);
-  const cfgMetafield = useMemo(() => findConfigMetafield(dataMetafields), [dataMetafields]);
+  // Config lives in custom/function-configuration for Automatic Discounts
+  const cfgMetafield =
+    metafields.find((m) => m?.namespace === "custom" && m?.key === "function-configuration") ??
+    null;
 
-  const [initialCfg, setInitialCfg] = useState(DEFAULT_CONFIG);
-  const [cfg, setCfg] = useState(DEFAULT_CONFIG);
-  const [loading, setLoading] = useState(true);
-  const [status, setStatus] = useState({ tone: "subdued", text: "" });
+  const initial = useMemo(() => {
+    const parsed = safeParseJson(cfgMetafield?.value);
 
-  // Bootstrap: load existing config (injected metafields first, GraphQL fallback),
-  // and ensure a metafield exists (create defaults if missing).
-  useEffect(() => {
-    let cancelled = false;
+    const triggerBE = intOrDefault(parsed?.triggerBE, DEFAULT_CONFIG.triggerBE);
+    const amountPerTrigger = Math.max(
+      0,
+      numOrDefault(parsed?.amountPerTrigger, DEFAULT_CONFIG.amountPerTrigger)
+    );
+    const maxDiscount = Math.max(
+      0,
+      numOrDefault(parsed?.maxDiscount, DEFAULT_CONFIG.maxDiscount)
+    );
 
-    async function bootstrap() {
-      try {
-        setLoading(true);
-        setStatus({ tone: "subdued", text: "" });
+    // Boolean toggle (default false)
+    const showConfigInMessage =
+      typeof parsed?.showConfigInMessage === "boolean"
+        ? parsed.showConfigInMessage
+        : DEFAULT_CONFIG.showConfigInMessage;
 
-        if (!data?.id) {
-          setStatus({
-            tone: "critical",
-            text:
-              "Missing discount context (shopify.data.id). Open this page from a discount details screen.",
-          });
-          return;
-        }
+    return { triggerBE, amountPerTrigger, maxDiscount, showConfigInMessage };
+  }, [cfgMetafield?.value]);
 
-        // 1) Prefer injected metafields (fast + offline).
-        let mf = cfgMetafield;
+  const [triggerBE, setTriggerBE] = useState(String(initial.triggerBE));
+  const [amountPerTrigger, setAmountPerTrigger] = useState(String(initial.amountPerTrigger));
+  const [maxDiscount, setMaxDiscount] = useState(String(initial.maxDiscount));
+  const [showConfigInMessage, setShowConfigInMessage] = useState(
+    Boolean(initial.showConfigInMessage)
+  );
 
-        // 2) Fallback: read via Admin GraphQL.
-        if (!mf) {
-          mf = await fetchConfigViaGraphql(data.id);
-        }
+  function resetForm() {
+    setTriggerBE(String(initial.triggerBE));
+    setAmountPerTrigger(String(initial.amountPerTrigger));
+    setMaxDiscount(String(initial.maxDiscount));
+    setShowConfigInMessage(Boolean(initial.showConfigInMessage));
+  }
 
-        if (mf?.value) {
-          const parsed = safeParseJson(mf.value);
-          const loadedCfg = parsed ? { ...DEFAULT_CONFIG, ...parsed } : DEFAULT_CONFIG;
-
-          if (!cancelled) {
-            setInitialCfg(loadedCfg);
-            setCfg(loadedCfg);
-          }
-          return;
-        }
-
-        // Not found: create defaults (applyMetafieldChange first, GraphQL fallback).
-        const res = await applyMetafieldChange(DEFAULT_CONFIG);
-        if (res?.type === "error") {
-          const g = await setConfigViaGraphql(data.id, DEFAULT_CONFIG);
-          if (!g.ok && !cancelled) {
-            setStatus({ tone: "critical", text: `Couldn't create config: ${g.message}` });
-          }
-        }
-
-        if (!cancelled) {
-          setInitialCfg(DEFAULT_CONFIG);
-          setCfg(DEFAULT_CONFIG);
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setStatus({
-            tone: "critical",
-            text: `Failed to load settings: ${e?.message ?? String(e)}`,
-          });
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-
-    bootstrap();
-    return () => {
-      cancelled = true;
-    };
-  }, [data?.id, cfgMetafield?.id]);
-
-  const previewMessage = useMemo(() => {
-    const parts = [];
-    parts.push(`${intOrDefault(cfg.triggerBE, DEFAULT_CONFIG.triggerBE)} BE`);
-    parts.push(`${money(numOrDefault(cfg.amountPerTrigger, DEFAULT_CONFIG.amountPerTrigger))} per trigger`);
-    if (numOrDefault(cfg.maxDiscount, 0) > 0) {
-      parts.push(`cap ${money(cfg.maxDiscount)}`);
-    }
-    return parts.join(" • ");
-  }, [cfg]);
-
-  const onSubmit = async () => {
-    setStatus({ tone: "subdued", text: "" });
-
-    const cleanCfg = {
-      triggerBE: intOrDefault(cfg.triggerBE, DEFAULT_CONFIG.triggerBE),
-      amountPerTrigger: numOrDefault(cfg.amountPerTrigger, DEFAULT_CONFIG.amountPerTrigger),
-      maxDiscount: numOrDefault(cfg.maxDiscount, 0),
-      showConfigInMessage: Boolean(cfg.showConfigInMessage),
+  async function save() {
+    const config = {
+      triggerBE: intOrDefault(triggerBE, DEFAULT_CONFIG.triggerBE),
+      amountPerTrigger: Math.max(
+        0,
+        numOrDefault(amountPerTrigger, DEFAULT_CONFIG.amountPerTrigger)
+      ),
+      maxDiscount: Math.max(0, numOrDefault(maxDiscount, DEFAULT_CONFIG.maxDiscount)),
+      showConfigInMessage: Boolean(showConfigInMessage),
     };
 
-    const res = await applyMetafieldChange(cleanCfg);
-    if (res?.type === "error") {
-      const current = getExtensionData();
-      const g = await setConfigViaGraphql(current?.id, cleanCfg);
-      if (!g.ok) {
-        setStatus({
-          tone: "critical",
-          text: `Save failed: ${res.message ?? "applyMetafieldChange error"}; ${g.message}`,
-        });
-        return;
-      }
-    }
+    await shopify.applyMetafieldChange({
+      type: "updateMetafield",
+      namespace: "custom",
+      key: "function-configuration",
+      valueType: "json",
+      value: JSON.stringify(config),
+    });
+  }
 
-    setInitialCfg(cleanCfg);
-    setCfg(cleanCfg);
-    setStatus({ tone: "subdued", text: "Saved." });
-  };
+  const trigger = intOrDefault(triggerBE, DEFAULT_CONFIG.triggerBE);
+  const amt = Math.max(0, numOrDefault(amountPerTrigger, DEFAULT_CONFIG.amountPerTrigger));
+  const cap = Math.max(0, numOrDefault(maxDiscount, DEFAULT_CONFIG.maxDiscount));
 
-  const onReset = () => {
-    setCfg(initialCfg);
-    setStatus({ tone: "subdued", text: "Reverted changes." });
-  };
+  const previewRows = [1, 2, 3].map((k) => {
+    const be = trigger * k;
+    const raw = amt * k;
+    const applied = cap > 0 ? Math.min(raw, cap) : raw;
+    const capped = cap > 0 && applied < raw;
+    return { be, raw, applied, capped };
+  });
 
-  const handleTriggerChange = (value) => {
-    setCfg((p) => ({ ...p, triggerBE: intOrDefault(value, DEFAULT_CONFIG.triggerBE) }));
-  };
-
-  const handleAmountChange = (value) => {
-    setCfg((p) => ({ ...p, amountPerTrigger: numOrDefault(value, DEFAULT_CONFIG.amountPerTrigger) }));
-  };
-
-  const handleMaxChange = (value) => {
-    setCfg((p) => ({ ...p, maxDiscount: numOrDefault(value, 0) }));
-  };
-
-  const handleShowInMsgChange = (checked) => {
-    setCfg((p) => ({ ...p, showConfigInMessage: Boolean(checked) }));
-  };
+  const messagePreview = showConfigInMessage
+    ? `Basket Booster discount (trigger=${trigger}, amt=${amt}, cap=${cap})`
+    : "Basket Booster discount";
 
   return (
-    <s-function-settings onSubmit={onSubmit} onReset={onReset}>
-      <s-stack gap="large">
-        <s-text variant="headingLg">Basket Booster configuration</s-text>
+    <s-function-settings onSubmit={(e) => e.waitUntil(save())} onReset={resetForm}>
+      <s-stack gap="base">
+        <s-number-field
+          label="Bottle equivalents needed to trigger"
+          name="triggerBE"
+          value={triggerBE}
+          min="1"
+          step="1"
+          onChange={(e) => setTriggerBE(e.currentTarget.value)}
+        />
 
-        {status.text ? <s-text tone={status.tone}>{status.text}</s-text> : null}
+        <s-number-field
+          label="Discount amount per trigger (CAD)"
+          name="amountPerTrigger"
+          value={amountPerTrigger}
+          min="0"
+          step="0.01"
+          onChange={(e) => setAmountPerTrigger(e.currentTarget.value)}
+        />
 
-        <s-stack gap="small">
-          <s-text variant="headingMd">Preview</s-text>
-          <s-text>
-            {cfg.showConfigInMessage ? previewMessage : "Config details hidden in message"}
+        <s-number-field
+          label="Maximum discount per order (CAD) — 0 means no cap"
+          name="maxDiscount"
+          value={maxDiscount}
+          min="0"
+          step="0.01"
+          onChange={(e) => setMaxDiscount(e.currentTarget.value)}
+        />
+
+        {/* NEW: display config in checkout message */}
+        <s-checkbox
+          name="showConfigInMessage"
+          label="Show trigger/amount/cap in the discount message at checkout"
+          checked={showConfigInMessage}
+          onChange={(e) => setShowConfigInMessage(Boolean(e.currentTarget.checked))}
+        />
+
+
+        <s-text tone="subdued">
+          Message preview: <s-text emphasis="bold">{messagePreview}</s-text>
+        </s-text>
+
+        <s-stack gap="tight">
+          <s-text emphasis="bold">Preview (scales per trigger)</s-text>
+
+          {previewRows.map((r) => (
+            <s-text key={r.be} tone="subdued">
+              {r.be} BE → {money(r.applied)} off raw {money(r.raw)}
+              {r.capped ? " (capped)" : ""}
+            </s-text>
+          ))}
+
+          <s-text tone="subdued">
+            Example: If Trigger is {trigger} BE and Amount is {money(amt)}, then every {trigger} BE earns{" "}
+            {money(amt)} off. {cap > 0 ? `A cap of ${money(cap)} per order is applied.` : "No cap is applied."}
           </s-text>
-        </s-stack>
 
-        <s-stack gap="base">
-          <s-number-field
-            label="Bottle Equivalents required per trigger (BE)"
-            value={String(cfg.triggerBE)}
-            onChange={handleTriggerChange}
-            min={1}
-            step={1}
-            helpText="Example: 6 BE triggers the discount once; 12 BE triggers it twice, etc."
-            disabled={loading}
-          />
-
-          <s-number-field
-            label="Discount amount per trigger"
-            value={String(cfg.amountPerTrigger)}
-            onChange={handleAmountChange}
-            min={0}
-            step={0.01}
-            helpText="Fixed dollar amount applied per trigger."
-            disabled={loading}
-          />
-
-          <s-number-field
-            label="Maximum discount cap (0 = no cap)"
-            value={String(cfg.maxDiscount)}
-            onChange={handleMaxChange}
-            min={0}
-            step={0.01}
-            helpText="Optional: set an overall cap for this discount. Use 0 for no cap."
-            disabled={loading}
-          />
-
-          <s-checkbox
-            checked={Boolean(cfg.showConfigInMessage)}
-            onChange={handleShowInMsgChange}
-            disabled={loading}
-          >
-            Show config details in discount message
-          </s-checkbox>
-
-          <s-text tone="subdued">Stored on discount metafield: custom.function-configuration</s-text>
+          <s-text tone="subdued">
+            Note: At checkout, the discount is also limited by the cart subtotal (it will never exceed the subtotal).
+          </s-text>
         </s-stack>
       </s-stack>
     </s-function-settings>
   );
 }
-
-export default async () => {
-  // Shopify scaffolds this extension to mount to document.body.
-  render(<Extension />, document.body);
-};
