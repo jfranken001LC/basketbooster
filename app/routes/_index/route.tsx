@@ -1,3 +1,28 @@
+import type { LoaderFunctionArgs } from "react-router";
+import { redirect } from "react-router";
+
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const url = new URL(request.url);
+
+  // When Shopify Admin loads an embedded app, it appends params like:
+  // embedded=1, host, shop, session/id_token, etc. :contentReference[oaicite:5]{index=5}
+  const isEmbedded =
+    url.searchParams.get("embedded") === "1" ||
+    url.searchParams.has("host") ||
+    url.searchParams.has("session") ||
+    url.searchParams.has("id_token");
+
+  const hasShop = url.searchParams.has("shop");
+
+  // If Shopify is loading the app, immediately route into the embedded UI layout (/app)
+  if (isEmbedded && hasShop) {
+    return redirect(`/app${url.search}`);
+  }
+
+  // Otherwise, show the public landing page (no shop-domain input)
+  return null;
+};
+
 export default function Index() {
   return (
     <main style={{ fontFamily: "system-ui", padding: 32, maxWidth: 980, margin: "0 auto" }}>
@@ -26,46 +51,11 @@ export default function Index() {
         </div>
 
         <div style={{ border: "1px solid #e5e5e5", borderRadius: 12, padding: 16 }}>
-          <h3 style={{ marginTop: 0 }}>Free, simple setup</h3>
+          <h3 style={{ marginTop: 0 }}>Open from Shopify Admin</h3>
           <p style={{ marginBottom: 0 }}>
-            Install, set your BE values, create an <strong>Amount off order</strong> discount, and you’re done.
+            After installation, open the app from <strong>Shopify Admin → Apps</strong>. No separate login is required.
           </p>
         </div>
-      </section>
-
-      <section style={{ marginTop: 28, borderTop: "1px solid #eee", paddingTop: 20 }}>
-        <h2 style={{ marginTop: 0 }}>Open the app</h2>
-        <p style={{ marginTop: 6 }}>
-          Enter your Shopify store domain to log in and open the embedded admin experience.
-        </p>
-
-        {/* Keep this form — it’s how merchants start OAuth in the Shopify scaffold */}
-        <form method="post" action="/auth" style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <label htmlFor="shop" style={{ fontWeight: 600 }}>
-            Shop domain
-          </label>
-          <input
-            id="shop"
-            name="shop"
-            type="text"
-            placeholder="your-store.myshopify.com"
-            required
-            style={{ padding: "10px 12px", borderRadius: 10, border: "1px solid #ccc", minWidth: 280 }}
-          />
-          <button
-            type="submit"
-            style={{
-              padding: "10px 14px",
-              borderRadius: 10,
-              border: "1px solid #111",
-              background: "#111",
-              color: "#fff",
-              cursor: "pointer",
-            }}
-          >
-            Log in
-          </button>
-        </form>
       </section>
 
       <footer style={{ marginTop: 36, borderTop: "1px solid #eee", paddingTop: 18, fontSize: 14 }}>

@@ -10,11 +10,11 @@ git clean -fd
 
 npm ci --omit=dev --no-audit --no-fund
 npm run build
+
 sudo systemctl start basketbooster
-# if you stopped nginx
 sudo systemctl start nginx
 sudo systemctl status basketbooster --no-pager
-
+sudo systemctl status nginx --no-pager
 
 
 ===
