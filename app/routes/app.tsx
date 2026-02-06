@@ -1,103 +1,135 @@
-import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { NavMenu } from "@shopify/app-bridge-react";
 import {
-  Links,
-  Meta,
+  Link,
   Outlet,
-  Scripts,
-  ScrollRestoration,
-  useLoaderData,
+  isRouteErrorResponse,
+  useLocation,
   useRouteError,
-} from "@remix-run/react";
-import { json } from "@remix-run/node";
-import type { LinksFunction } from "@remix-run/node";
+} from "react-router";
 
-import { authenticate } from "../shopify.server";
+/**
+ * For embedded apps, Shopify needs stable query params (host/shop/embedded).
+ * Do NOT carry ephemeral params forward (hmac/timestamp/session/id_token).
+ */
+function buildEmbeddedSearch(search: string): string {
+  const params = new URLSearchParams(search);
+  const keep = new URLSearchParams();
 
-export const links: LinksFunction = () => [
-  { rel: "preconnect", href: "https://cdn.shopify.com/" },
-  {
-    rel: "stylesheet",
-    href: "https://cdn.shopify.com/static/fonts/inter/v4/styles.css",
-  },
-];
+  for (const key of ["embedded", "host", "shop", "locale"]) {
+    const v = params.get(key);
+    if (v) keep.set(key, v);
+  }
 
-export const loader = async ({ request }: { request: Request }) => {
-  // If not authenticated, this will redirect through OAuth / session-token flow as needed.
-  await authenticate.admin(request);
-
-  const apiKey = process.env.SHOPIFY_API_KEY ?? "";
-  const appUrl = process.env.SHOPIFY_APP_URL ?? "";
-
-  return json({
-    apiKey,
-    appUrl,
-  });
-};
+  const qs = keep.toString();
+  return qs ? `?${qs}` : "";
+}
 
 export default function App() {
-  const { apiKey, appUrl } = useLoaderData<typeof loader>();
+  const apiKey = import.meta.env.VITE_SHOPIFY_API_KEY as string | undefined;
+  const location = useLocation();
 
-  // If the API key is missing/mismatched, App Bridge init can fail and appear as a blank screen.
-  // Render an explicit diagnostic instead.
+  // If this is missing, App Bridge + embedded UI will commonly render “blank”.
   if (!apiKey) {
     return (
-      <html lang="en">
-        <head>
-          <Meta />
-          <Links />
-        </head>
-        <body style={{ fontFamily: "Inter, system-ui, Arial", padding: 24 }}>
-          <h1 style={{ fontSize: 22, marginBottom: 12 }}>
-            BasketBooster: Missing SHOPIFY_API_KEY
-          </h1>
+      <main
+        style={{
+          fontFamily: "system-ui",
+          padding: 24,
+          maxWidth: 900,
+          margin: "0 auto",
+        }}
+      >
+        <h1 style={{ marginTop: 0 }}>BasketBooster – Misconfigured build</h1>
 
-          <p style={{ marginBottom: 12, lineHeight: 1.4 }}>
-            Your embedded app loaded, but <code>process.env.SHOPIFY_API_KEY</code>{" "}
-            is empty on the server.
-          </p>
+        <p style={{ fontSize: 16, lineHeight: 1.5 }}>
+          This build is missing <code>VITE_SHOPIFY_API_KEY</code>.
+        </p>
 
-          <ul style={{ lineHeight: 1.6 }}>
-            <li>
-              In <b>Shopify Partners</b> → App → <b>Settings</b>, copy the <b>Client ID</b>
-              and set it as <code>SHOPIFY_API_KEY</code> in your server environment.
-            </li>
-            <li>
-              Ensure the app you open in the store admin matches that Client ID:
-              the admin URL will include <code>/apps/&lt;client_id&gt;</code>.
-            </li>
-          </ul>
+        <ol style={{ lineHeight: 1.6 }}>
+          <li>
+            Set <code>VITE_SHOPIFY_API_KEY</code> at build time (it should match
+            your Partner dashboard <em>Client ID</em>).
+          </li>
+          <li>Rebuild and redeploy.</li>
+        </ol>
 
-          {appUrl ? (
-            <p style={{ marginTop: 12 }}>
-              Current <code>SHOPIFY_APP_URL</code>: <code>{appUrl}</code>
-            </p>
-          ) : null}
-
-          <Scripts />
-        </body>
-      </html>
+        <p style={{ color: "#666" }}>
+          Current route:{" "}
+          <code>
+            {location.pathname}
+            {location.search}
+          </code>
+        </p>
+      </main>
     );
   }
+
+  const embeddedSearch = buildEmbeddedSearch(location.search);
+  const to = (pathname: string) => `${pathname}${embeddedSearch}`;
 
   return (
     <AppProvider isEmbeddedApp apiKey={apiKey}>
       <NavMenu>
-        <a href="/app" rel="home">
+        <Link to={to("/app")} rel="home">
           Home
-        </a>
-        <a href="/app/additional">Additional page</a>
+        </Link>
+        <Link to={to("/app/additional")}>Additional page</Link>
       </NavMenu>
 
-      <Outlet />
+      {/* Wrapper helps avoid “looks blank” when a child route throws */}
+      <div style={{ minHeight: "100vh" }}>
+        <Outlet />
+      </div>
     </AppProvider>
   );
 }
 
-// Shopify error boundary (kept)
 export function ErrorBoundary() {
-  return boundary.error(useRouteError());
-}
+  const error = useRouteError();
 
-export const headers = boundary.headers;
+  let title = "Something went wrong";
+  let details: string | undefined;
+
+  if (isRouteErrorResponse(error)) {
+    title = `${error.status} ${error.statusText}`;
+    if (typeof error.data === "string") details = error.data;
+    else if (error.data) details = JSON.stringify(error.data, null, 2);
+  } else if (error instanceof Error) {
+    details = error.stack || error.message;
+  } else if (error) {
+    details = JSON.stringify(error, null, 2);
+  }
+
+  return (
+    <main
+      style={{
+        fontFamily: "system-ui",
+        padding: 24,
+        maxWidth: 900,
+        margin: "0 auto",
+      }}
+    >
+      <h1 style={{ marginTop: 0 }}>{title}</h1>
+
+      <p style={{ fontSize: 16, lineHeight: 1.5 }}>
+        The embedded shell is running, but a UI route threw an exception. Fix the
+        error in the route component that rendered this page.
+      </p>
+
+      {details ? (
+        <pre
+          style={{
+            whiteSpace: "pre-wrap",
+            background: "#f6f6f7",
+            padding: 16,
+            borderRadius: 12,
+            overflowX: "auto",
+          }}
+        >
+          {details}
+        </pre>
+      ) : null}
+    </main>
+  );
+}
