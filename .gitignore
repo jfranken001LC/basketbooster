@@ -1,8 +1,10 @@
-node_modules
+# dependencies
+node_modules/
 
 # macOS
 .DS_Store
 
+#build artifacts
 /.cache
 /build
 /app/build
@@ -10,14 +12,14 @@ node_modules
 /public/_dev
 /app/public/build
 /prisma/dev.sqlite
+/prisma/prod.sqlite
 /prisma/dev.sqlite-journal
+/prisma/prod.sqlite-journal
 database.sqlite
 
+# env / secrets
 .env
 .env.*
-
-
-
 
 
 /extensions/*/dist
