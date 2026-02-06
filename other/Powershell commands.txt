@@ -11,11 +11,8 @@ Stop-Transcript
 
 shopify app dev clean -s lions-creek-dev-3.myshopify.com
 
-ngrok config add-authtoken 38rAfKvVJGNCgyEUHBLEYIQ1ZLu_7XNNdMwFkTWjJxRmv88XG
 
-ngrok http https://localhost:4242 --host-header=rewrite
-
-shopify app dev --reset -s lions-creek-dev-3.myshopify.com --tunnel-url=https://beamish-deistically-tina.ngrok-free.dev:4242
+shopify app dev --reset 
 
 
 

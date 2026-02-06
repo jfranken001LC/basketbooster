@@ -8,7 +8,6 @@ git log --oneline --graph --decorate --all
 
 npm ci
 export DATABASE_URL="file:/var/www/basketbooster/prisma/prod.sqlite"
-rm -f prisma/prod.sqlite
 npx prisma migrate deploy
 ls -la prisma/prod.sqlite
 sqlite3 prisma/prod.sqlite ".tables"
@@ -18,6 +17,24 @@ sudo systemctl start basketbooster
 sudo systemctl start nginx
 sudo systemctl status basketbooster --no-pager
 sudo systemctl status nginx --no-pager
+
+===
+git reset --hard <sha>
+===
+
+TROUBLESHOOTING
+# 1) Is nginx complaining about upstream?
+sudo tail -n 200 /var/log/nginx/error.log
+
+# 2) Is your node service running?
+sudo systemctl status basketbooster -l --no-pager
+journalctl -u basketbooster -n 200 -l --no-pager
+
+# 3) Is anything actually listening on port 3000?
+sudo ss -ltnp | grep ':3000' || true
+
+# 4) Can we hit the app locally (bypassing nginx)?
+curl -sv http://127.0.0.1:3000/ -o /dev/null
 
 
 ===

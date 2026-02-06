@@ -1,20 +1,44 @@
-sudo systemctl stop basketbooster
-sudo systemctl stop nginx
+#!/usr/bin/env bash
+set -euo pipefail
 
-cd /var/www/basketbooster
-git status
-git pull
-git log --oneline --graph --decorate --all
+APP_DIR="/var/www/basketbooster"
+cd "$APP_DIR"
 
+echo "==== Stopping app service ===="
+sudo systemctl stop basketbooster || true
+
+echo "==== Updating code from origin/main ===="
+git fetch --all --prune
+git checkout main
+git reset --hard origin/main
+
+echo "==== Installing dependencies (include dev deps for build) ===="
+# Ensure build tooling is present even on production servers
+export NODE_ENV=development
 npm ci
-export DATABASE_URL="file:/var/www/basketbooster/prisma/prod.sqlite"
-rm -f prisma/prod.sqlite
+
+echo "==== Loading env for prisma/build ===="
+set -a
+source .env
+set +a
+
+echo "==== Prisma deploy ===="
 npx prisma migrate deploy
-ls -la prisma/prod.sqlite
-sqlite3 prisma/prod.sqlite ".tables"
-sqlite3 prisma/prod.sqlite "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
+npx prisma generate
+
+echo "==== Building app ===="
 npm run build
+
+if [ ! -f "build/server/index.js" ]; then
+  echo "ERROR: build/server/index.js not found. Build failed."
+  exit 1
+fi
+
+echo "==== Restarting app service ===="
 sudo systemctl start basketbooster
-sudo systemctl start nginx
-sudo systemctl status basketbooster --no-pager
-sudo systemctl status nginx --no-pager
+sudo systemctl status basketbooster --no-pager -n 25
+
+echo "==== Quick health check ===="
+curl -I http://127.0.0.1:${PORT:-3000}/ || true
+
+echo "==== Done ===="
