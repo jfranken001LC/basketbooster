@@ -25,7 +25,7 @@ export default function Support() {
           <strong> 250ml=1</strong>, <strong>500ml=2</strong>, <strong>2L=4</strong>.
         </li>
         <li>
-          Create an <strong>Amount off order</strong> discount and choose the app function:
+          Create a discount and choose the app function:
           <strong> Bottle Equivalent Discount Function</strong>.
         </li>
         <li>
@@ -35,10 +35,6 @@ export default function Support() {
 
       <h2>Common issues</h2>
       <ul>
-        <li>
-          If you created a <strong>shipping</strong> discount, Shopify will say the function doesn’t support it. Create an{" "}
-          <strong>Amount off order</strong> discount instead.
-        </li>
         <li>
           If no discount applies, confirm the product metafield has a numeric BE value and your trigger threshold is met.
         </li>

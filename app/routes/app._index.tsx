@@ -14,7 +14,7 @@ export default function Index() {
           250&nbsp;mL=1, 500&nbsp;mL=2, 2&nbsp;L tins=0).
         </s-paragraph>
         <s-paragraph>
-          2) In Shopify Admin, create an <strong>Amount off order</strong> discount and select the{" "}
+          2) In Shopify Admin, create a discount and select the{" "}
           <strong>Bottle Equivalent Discount Function</strong>.
         </s-paragraph>
         <s-paragraph>
