@@ -29,7 +29,6 @@ export default function App() {
   const apiKey = import.meta.env.VITE_SHOPIFY_API_KEY as string | undefined;
   const location = useLocation();
 
-  // If this is missing, App Bridge + embedded UI will commonly render “blank”.
   if (!apiKey) {
     return (
       <main
@@ -48,8 +47,8 @@ export default function App() {
 
         <ol style={{ lineHeight: 1.6 }}>
           <li>
-            Set <code>VITE_SHOPIFY_API_KEY</code> at build time (it should match
-            your Partner dashboard <em>Client ID</em>).
+            Set <code>VITE_SHOPIFY_API_KEY</code> at build time (should match your
+            Partner dashboard <em>Client ID</em>).
           </li>
           <li>Rebuild and redeploy.</li>
         </ol>
@@ -77,7 +76,6 @@ export default function App() {
         <Link to={to("/app/additional")}>Additional page</Link>
       </NavMenu>
 
-      {/* Wrapper helps avoid “looks blank” when a child route throws */}
       <div style={{ minHeight: "100vh" }}>
         <Outlet />
       </div>

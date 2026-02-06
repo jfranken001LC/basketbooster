@@ -5,80 +5,75 @@ APP_DIR="/var/www/basketbooster"
 BRANCH="main"
 REMOTE="origin"
 SERVICE="basketbooster"
-
-# Prefer keeping secrets OUTSIDE the repo:
-#   sudo mkdir -p /etc/basketbooster
-#   sudo nano /etc/basketbooster/basketbooster.env
-#   sudo chmod 600 /etc/basketbooster/basketbooster.env
-ENV_FILE_PRIMARY="/etc/basketbooster/basketbooster.env"
-ENV_FILE_FALLBACK="${APP_DIR}/.env"
+ENV_FILE="/etc/basketbooster/basketbooster.env"
+PORT_DEFAULT="3000"
 
 cd "$APP_DIR"
 
 echo "==== Preflight ===="
 echo "Repo: $APP_DIR"
 echo "User: $(whoami)"
-echo "Node: $(node -v || true)"
-echo "NPM:  $(npm -v || true)"
+echo "Node: $(node -v)"
+echo "NPM:  $(npm -v)"
 echo
 
 echo "==== Stop service (if running) ===="
-sudo systemctl stop "$SERVICE" || true
+sudo systemctl stop "$SERVICE" >/dev/null 2>&1 || true
 echo
 
 echo "==== Fetch + hard reset to ${REMOTE}/${BRANCH} ===="
-git remote -v
-git fetch "$REMOTE" --prune
-git checkout -f "$BRANCH"
+git fetch --all --prune
+git checkout "$BRANCH"
 git reset --hard "${REMOTE}/${BRANCH}"
 echo
 
-echo "==== Clean ignored build artifacts (DO NOT remove env files) ===="
-# NOTE:
-#   git clean -fdX removes *ignored* files (including .env if .env is in .gitignore)
-#   So we explicitly exclude env files.
-git clean -fdX \
+echo "==== Clean ignored/untracked build artifacts (DO NOT remove env files) ===="
+# -x = remove ALL untracked (including ignored)
+# -e = exclude patterns (protect env files if present in repo)
+git clean -fdx \
   -e ".env" \
-  -e ".env.*" \
-  -e "/.env" \
-  -e "/.env.*"
+  -e ".env.*"
 echo
 
 echo "==== Show current revision ===="
-git status -sb || true
-git rev-parse --short HEAD
+git --no-pager log -1 --oneline
 echo
 
 echo "==== Load env (required for prisma/build) ===="
-ENV_FILE=""
-if [[ -f "$ENV_FILE_PRIMARY" ]]; then
-  ENV_FILE="$ENV_FILE_PRIMARY"
-elif [[ -f "$ENV_FILE_FALLBACK" ]]; then
-  ENV_FILE="$ENV_FILE_FALLBACK"
-fi
-
-if [[ -z "$ENV_FILE" ]]; then
-  echo "ERROR: No env file found."
-  echo "Expected one of:"
-  echo "  - $ENV_FILE_PRIMARY   (recommended)"
-  echo "  - $ENV_FILE_FALLBACK"
+if [[ -f "$ENV_FILE" ]]; then
+  if [[ -r "$ENV_FILE" ]]; then
+    echo "Using env file (direct): $ENV_FILE"
+    set -a
+    # shellcheck disable=SC1090
+    source "$ENV_FILE"
+    set +a
+  else
+    echo "Env file not readable by $(whoami). Using sudo to load: $ENV_FILE"
+    set -a
+    # shellcheck disable=SC1090
+    source <(sudo cat "$ENV_FILE")
+    set +a
+  fi
+else
+  echo "ERROR: Env file not found: $ENV_FILE"
+  echo "Create it and include DATABASE_URL at minimum."
   exit 1
 fi
 
-echo "Using env file: $ENV_FILE"
-set -a
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-set +a
+if [[ -z "${DATABASE_URL:-}" ]]; then
+  echo "ERROR: DATABASE_URL is not set after loading env. Prisma cannot run."
+  exit 1
+fi
 
-: "${DATABASE_URL:?ERROR: DATABASE_URL is missing after loading env file. Fix your env file.}"
-echo "DATABASE_URL is set."
+export PORT="${PORT:-$PORT_DEFAULT}"
+echo "PORT=$PORT"
 echo
 
 echo "==== Install dependencies (include dev deps for build) ===="
-# Ensure devDependencies exist for build tooling
-export NODE_ENV=development
-npm ci
+# npm ci includes dev deps unless you explicitly omit them.
+# Force non-production mode to prevent any environment-based omits.
+export NODE_ENV="development"
+npm ci --no-audit --fund=false
 echo
 
 echo "==== Prisma deploy ===="
@@ -86,33 +81,33 @@ npx prisma migrate deploy
 npx prisma generate
 echo
 
+echo "==== Build function extension(s) ===="
+# Your package.json already defines build:function
+npm run build:function
+echo
+
 echo "==== Build app ===="
 npm run build
 echo
 
-echo "==== Verify build output ===="
-if [[ ! -f "${APP_DIR}/build/server/index.js" ]]; then
+echo "==== Verify server entry exists ===="
+if [[ ! -f "build/server/index.js" ]]; then
   echo "ERROR: build/server/index.js not found."
-  echo "Build did not produce the expected React Router server output."
-  echo "Run these for diagnostics:"
-  echo "  ls -la build build/server || true"
-  echo "  npm run build"
+  echo "Listing likely candidates:"
+  find . -maxdepth 6 -type f -path "*build*/server/index.js" -print || true
   exit 1
 fi
 ls -la build/server/index.js
 echo
 
-echo "==== Start app service ===="
+echo "==== Reset service failure state + restart ===="
+sudo systemctl reset-failed "$SERVICE" || true
 sudo systemctl start "$SERVICE"
-sudo systemctl status "$SERVICE" --no-pager -n 30 || true
-echo
-
-echo "==== Check listener on :3000 ===="
-sudo ss -ltnp | grep ':3000' || true
+sudo systemctl status "$SERVICE" --no-pager -n 25 -l
 echo
 
 echo "==== Local health check (bypass nginx) ===="
-curl -sS -I "http://127.0.0.1:${PORT:-3000}/" || true
+curl -sS -I "http://127.0.0.1:${PORT}/" || true
 echo
 
 echo "==== Done ===="
