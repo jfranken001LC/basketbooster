@@ -8,6 +8,7 @@ import {
   isRouteErrorResponse,
   useLocation,
   useRouteError,
+  useLoaderData,
 } from "react-router";
 import { authenticate } from "../shopify.server";
 
@@ -35,7 +36,7 @@ function buildEmbeddedSearch(search: string): string {
  */
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
-  return null;
+  return { apiKey: process.env.SHOPIFY_API_KEY || "" };
 };
 
 export const headers: HeadersFunction = (headersArgs) => {
@@ -43,7 +44,7 @@ export const headers: HeadersFunction = (headersArgs) => {
 };
 
 export default function App() {
-  const apiKey = import.meta.env.VITE_SHOPIFY_API_KEY as string | undefined;
+  const { apiKey } = useLoaderData<typeof loader>();
   const location = useLocation();
 
   if (!apiKey) {
@@ -85,7 +86,7 @@ export default function App() {
   const to = (pathname: string) => `${pathname}${embeddedSearch}`;
 
   return (
-    <AppProvider isEmbeddedApp apiKey={apiKey}>
+    <AppProvider embedded apiKey={apiKey}>
       <NavMenu>
         <Link to={to("/app")} rel="home">
           Home

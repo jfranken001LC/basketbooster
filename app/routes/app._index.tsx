@@ -60,6 +60,13 @@ export default function Index() {
           amount off the order subtotal. You can optionally set a maximum cap per order.
         </s-paragraph>
       </s-section>
+
+      <s-section>
+        <s-paragraph>
+          Need help? Visit <a href="/support">Support</a>. View <a href="/privacy">Privacy</a> and <a href="/terms">Terms</a>.
+        </s-paragraph>
+      </s-section>
+
     </s-page>
   );
 }
