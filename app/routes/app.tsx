@@ -1,5 +1,7 @@
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { NavMenu } from "@shopify/app-bridge-react";
+import { boundary } from "@shopify/shopify-app-react-router/server";
+import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
 import {
   Link,
   Outlet,
@@ -7,6 +9,7 @@ import {
   useLocation,
   useRouteError,
 } from "react-router";
+import { authenticate } from "../shopify.server";
 
 /**
  * For embedded apps, Shopify needs stable query params (host/shop/embedded).
@@ -24,6 +27,20 @@ function buildEmbeddedSearch(search: string): string {
   const qs = keep.toString();
   return qs ? `?${qs}` : "";
 }
+
+/**
+ * Protect all embedded routes (/app/*) and ensure App Bridge headers are applied.
+ * This avoids "static landing page" behavior in review and ensures a merchant-
+ * authenticated session is always present before hitting UI routes.
+ */
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  await authenticate.admin(request);
+  return null;
+};
+
+export const headers: HeadersFunction = (headersArgs) => {
+  return boundary.headers(headersArgs);
+};
 
 export default function App() {
   const apiKey = import.meta.env.VITE_SHOPIFY_API_KEY as string | undefined;
@@ -73,6 +90,7 @@ export default function App() {
         <Link to={to("/app")} rel="home">
           Home
         </Link>
+        <Link to={to("/app/discounts")}>Discounts</Link>
         <Link to={to("/app/additional")}>Additional page</Link>
       </NavMenu>
 

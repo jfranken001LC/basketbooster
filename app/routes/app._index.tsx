@@ -1,6 +1,36 @@
+import { useLocation } from "react-router";
+
+/**
+ * Keep embedded params (host/shop/embedded) when navigating.
+ */
+function buildEmbeddedSearch(search: string): string {
+  const params = new URLSearchParams(search);
+  const keep = new URLSearchParams();
+
+  for (const key of ["embedded", "host", "shop", "locale"]) {
+    const v = params.get(key);
+    if (v) keep.set(key, v);
+  }
+
+  const qs = keep.toString();
+  return qs ? `?${qs}` : "";
+}
+
 export default function Index() {
+  const location = useLocation();
+  const embeddedSearch = buildEmbeddedSearch(location.search);
+  const discountsHref = `/app/discounts${embeddedSearch}`;
+
   return (
     <s-page>
+      <s-section heading="Manage Basket Booster discounts">
+        <s-paragraph>
+          Use the <strong>Discounts</strong> tab in the app navigation to create, activate/deactivate, and remove Basket
+          Booster discounts from inside the app.
+        </s-paragraph>
+        <s-link href={discountsHref}>Open Discount Manager</s-link>
+      </s-section>
+
       <s-section heading="Bottle Equivalent Discounts">
         <s-paragraph>
           Automatically apply scalable order discounts using your product Bottle Equivalent (BE) metafields — simple,
@@ -26,14 +56,8 @@ export default function Index() {
 
       <s-section heading="How it works">
         <s-paragraph>
-          The function sums BE values across the cart and applies the configured discount multiple times based on how many
-          trigger thresholds are met.
-        </s-paragraph>
-      </s-section>
-
-      <s-section>
-        <s-paragraph>
-          Need help? Visit <a href="/support">Support</a>. View <a href="/privacy">Privacy</a> and <a href="/terms">Terms</a>.
+          The function sums BE values across the cart, calculates how many full triggers are reached, and applies a fixed
+          amount off the order subtotal. You can optionally set a maximum cap per order.
         </s-paragraph>
       </s-section>
     </s-page>
