@@ -41,8 +41,49 @@ function numOrNull(v: FormDataEntryValue | null): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function toErrorString(err: unknown): string {
+  if (!err) return "Unknown error.";
+  if (typeof err === "string") return err;
+  if (err instanceof Error) return err.stack || err.message;
+  try {
+    return JSON.stringify(err, null, 2);
+  } catch {
+    return String(err);
+  }
+}
+
+/**
+ * Run an Admin GraphQL operation and surface GraphQL errors as a thrown Error.
+ * This avoids the route crashing with an opaque 500 and instead lets the page
+ * render a helpful error message.
+ */
+async function adminGraphqlJson<TData>(
+  admin: any,
+  query: string,
+  variables?: Record<string, any>
+): Promise<TData> {
+  const resp = await admin.graphql(query, variables ? { variables } : undefined);
+
+  let json: any;
+  try {
+    json = await resp.json();
+  } catch (e) {
+    throw new Error(
+      `Admin GraphQL returned a non-JSON response. ${toErrorString(e)}`
+    );
+  }
+
+  if (json?.errors?.length) {
+    const msg = json.errors.map((x: any) => x?.message).filter(Boolean).join("; ");
+    throw new Error(msg || "Admin GraphQL returned errors.");
+  }
+
+  return json?.data as TData;
+}
+
 async function getBeFunction(admin: any) {
-  const resp = await admin.graphql(
+  const data = await adminGraphqlJson<{ shopifyFunctions: { nodes: any[] } }>(
+    admin,
     `#graphql
     query GetFunctions($first: Int!) {
       shopifyFunctions(first: $first) {
@@ -55,12 +96,17 @@ async function getBeFunction(admin: any) {
         }
       }
     }`,
-    { variables: { first: 50 } }
+    { first: 50 }
   );
 
-  const json = await resp.json();
-  const nodes = json?.data?.shopifyFunctions?.nodes ?? [];
-  const fn = nodes.find((n: any) => n?.handle === "be-discount-function") ?? null;
+  const nodes = data?.shopifyFunctions?.nodes ?? [];
+  const fn =
+    nodes.find((n: any) => n?.handle === "be-discount-function") ??
+    // Safety net: if handle changed, try matching by title
+    nodes.find((n: any) =>
+      String(n?.title || "").toLowerCase().includes("bottle equivalent")
+    ) ??
+    null;
 
   return {
     functionId: fn?.id as string | undefined,
@@ -71,8 +117,33 @@ async function getBeFunction(admin: any) {
   };
 }
 
-async function listBasketBoosterDiscounts(admin: any, functionId: string): Promise<DiscountRow[]> {
-  const resp = await admin.graphql(
+async function listBasketBoosterDiscounts(
+  admin: any,
+  functionId: string
+): Promise<DiscountRow[]> {
+  // Keep the query filter conservative. Some shops/dev stores can throw errors
+  // on unsupported query terms. We filter to app discounts and then match the
+  // functionId in code.
+  const data = await adminGraphqlJson<{
+    discountNodes: {
+      nodes: Array<{
+        id: string;
+        metafield: { value: string | null } | null;
+        discount:
+          | null
+          | {
+              __typename: string;
+              discountId?: string;
+              title?: string;
+              status?: string;
+              startsAt?: string | null;
+              endsAt?: string | null;
+              appDiscountType?: { functionId?: string; title?: string } | null;
+            };
+      }>;
+    };
+  }>(
+    admin,
     `#graphql
     query ListDiscounts($first: Int!, $query: String!) {
       discountNodes(first: $first, query: $query) {
@@ -99,20 +170,17 @@ async function listBasketBoosterDiscounts(admin: any, functionId: string): Promi
       }
     }`,
     {
-      variables: {
-        first: 100,
-        query: "type:app AND method:automatic",
-      },
+      first: 100,
+      query: "type:app",
     }
   );
 
-  const json = await resp.json();
-  const nodes = json?.data?.discountNodes?.nodes ?? [];
+  const nodes = data?.discountNodes?.nodes ?? [];
 
   const rows: DiscountRow[] = [];
 
   for (const n of nodes) {
-    const d = n?.discount;
+    const d: any = n?.discount;
     if (!d || d.__typename !== "DiscountAutomaticApp") continue;
 
     const fnId = d?.appDiscountType?.functionId;
@@ -130,11 +198,11 @@ async function listBasketBoosterDiscounts(admin: any, functionId: string): Promi
 
     rows.push({
       discountNodeId: n.id,
-      discountId: d.discountId,
-      title: d.title,
-      status: d.status,
-      startsAt: d.startsAt,
-      endsAt: d.endsAt,
+      discountId: String(d.discountId),
+      title: String(d.title || ""),
+      status: String(d.status || ""),
+      startsAt: d.startsAt ?? null,
+      endsAt: d.endsAt ?? null,
       config,
     });
   }
@@ -151,78 +219,120 @@ async function listBasketBoosterDiscounts(admin: any, functionId: string): Promi
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
+  let admin: any;
 
-  const fn = await getBeFunction(admin);
-
-  if (!fn.functionId) {
+  try {
+    const ctx = await authenticate.admin(request);
+    // Some versions return the admin object directly, others return { admin }.
+    admin = (ctx as any)?.admin ?? ctx;
+  } catch (e) {
+    // Redirect Responses should keep working as-is.
+    if (e instanceof Response) throw e;
     return {
       ok: false,
-      error:
-        "Could not find the Basket Booster discount function on this shop. Verify the app is installed and the function extension is registered (shopifyFunctions).",
-      function: fn,
+      error: `Authentication failed: ${toErrorString(e)}`,
+      function: null,
       discounts: [] as DiscountRow[],
     };
   }
 
-  const discounts = await listBasketBoosterDiscounts(admin, fn.functionId);
+  try {
+    const fn = await getBeFunction(admin);
 
-  return {
-    ok: true,
-    function: fn,
-    discounts,
-  };
+    if (!fn.functionId) {
+      return {
+        ok: false,
+        error:
+          "Could not find the Basket Booster discount function on this shop. Verify the app is installed and the function extension is registered (shopifyFunctions).",
+        function: fn,
+        discounts: [] as DiscountRow[],
+      };
+    }
+
+    const discounts = await listBasketBoosterDiscounts(admin, fn.functionId);
+
+    return {
+      ok: true,
+      function: fn,
+      discounts,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      error: toErrorString(e),
+      function: null,
+      discounts: [] as DiscountRow[],
+    };
+  }
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
+  let admin: any;
+
+  try {
+    const ctx = await authenticate.admin(request);
+    admin = (ctx as any)?.admin ?? ctx;
+  } catch (e) {
+    if (e instanceof Response) throw e;
+    return { ok: false, error: `Authentication failed: ${toErrorString(e)}` };
+  }
+
   const formData = await request.formData();
   const intent = String(formData.get("_action") || "");
 
-  const fn = await getBeFunction(admin);
-  if (!fn.functionId) {
-    return { ok: false, error: "Discount function not found (shopifyFunctions)." };
-  }
-
-  if (intent === "create") {
-    const title = String(formData.get("title") || "").trim() || "Basket Booster discount";
-    const triggerBE = intOrNull(formData.get("triggerBE"));
-    const amountPerTrigger = numOrNull(formData.get("amountPerTrigger"));
-    const maxDiscount = numOrNull(formData.get("maxDiscount"));
-
-    const errors: Record<string, string> = {};
-    if (!triggerBE || triggerBE < 1) errors.triggerBE = "Trigger BE must be 1 or higher.";
-    if (amountPerTrigger === null || amountPerTrigger < 0)
-      errors.amountPerTrigger = "Amount per trigger must be 0 or higher.";
-    if (maxDiscount === null || maxDiscount < 0) errors.maxDiscount = "Max discount must be 0 or higher.";
-
-    if (Object.keys(errors).length > 0) {
-      return { ok: false, errors };
+  try {
+    const fn = await getBeFunction(admin);
+    if (!fn.functionId) {
+      return { ok: false, error: "Discount function not found (shopifyFunctions)." };
     }
 
-    const config: BasketBoosterConfig = {
-      triggerBE: triggerBE!,
-      amountPerTrigger: amountPerTrigger!,
-      maxDiscount: maxDiscount!,
-    };
+    if (intent === "create") {
+      const title =
+        String(formData.get("title") || "").trim() || "Basket Booster discount";
+      const triggerBE = intOrNull(formData.get("triggerBE"));
+      const amountPerTrigger = numOrNull(formData.get("amountPerTrigger"));
+      const maxDiscount = numOrNull(formData.get("maxDiscount"));
 
-    const resp = await admin.graphql(
-      `#graphql
-      mutation CreateBasketBooster($automaticAppDiscount: DiscountAutomaticAppInput!) {
-        discountAutomaticAppCreate(automaticAppDiscount: $automaticAppDiscount) {
-          automaticAppDiscount {
-            discountId
-            title
-            status
+      const errors: Record<string, string> = {};
+      if (!triggerBE || triggerBE < 1)
+        errors.triggerBE = "Trigger BE must be 1 or higher.";
+      if (amountPerTrigger === null || amountPerTrigger < 0)
+        errors.amountPerTrigger = "Amount per trigger must be 0 or higher.";
+      if (maxDiscount === null || maxDiscount < 0)
+        errors.maxDiscount = "Max discount must be 0 or higher.";
+
+      if (Object.keys(errors).length > 0) {
+        return { ok: false, errors };
+      }
+
+      const config: BasketBoosterConfig = {
+        triggerBE: triggerBE!,
+        amountPerTrigger: amountPerTrigger!,
+        maxDiscount: maxDiscount!,
+      };
+
+      const data = await adminGraphqlJson<{
+        discountAutomaticAppCreate: {
+          automaticAppDiscount: { discountId: string; title: string; status: string } | null;
+          userErrors: Array<{ field: string[] | null; message: string }>;
+        };
+      }>(
+        admin,
+        `#graphql
+        mutation CreateBasketBooster($automaticAppDiscount: DiscountAutomaticAppInput!) {
+          discountAutomaticAppCreate(automaticAppDiscount: $automaticAppDiscount) {
+            automaticAppDiscount {
+              discountId
+              title
+              status
+            }
+            userErrors {
+              field
+              message
+            }
           }
-          userErrors {
-            field
-            message
-          }
-        }
-      }`,
-      {
-        variables: {
+        }`,
+        {
           automaticAppDiscount: {
             title,
             functionId: fn.functionId,
@@ -241,66 +351,69 @@ export const action = async ({ request }: ActionFunctionArgs) => {
               },
             ],
           },
-        },
+        }
+      );
+
+      const payload = data?.discountAutomaticAppCreate;
+      const userErrors = payload?.userErrors ?? [];
+
+      if (userErrors.length > 0) {
+        return {
+          ok: false,
+          error: userErrors.map((e) => e.message).join("; "),
+        };
       }
-    );
 
-    const json = await resp.json();
-    const payload = json?.data?.discountAutomaticAppCreate;
-    const userErrors = payload?.userErrors ?? [];
-
-    if (userErrors.length > 0) {
-      return { ok: false, error: userErrors.map((e: any) => e.message).join("; ") };
+      return { ok: true, created: payload?.automaticAppDiscount ?? null };
     }
 
-    return { ok: true, created: payload?.automaticAppDiscount ?? null };
-  }
+    if (intent === "activate" || intent === "deactivate" || intent === "delete") {
+      const id = String(formData.get("discountId") || "");
+      if (!id) return { ok: false, error: "Missing discountId." };
 
-  if (intent === "activate" || intent === "deactivate" || intent === "delete") {
-    const id = String(formData.get("discountId") || "");
-    if (!id) return { ok: false, error: "Missing discountId." };
-
-    const mutation =
-      intent === "activate"
-        ? `#graphql
-          mutation Activate($id: ID!) {
-            discountAutomaticActivate(id: $id) {
-              userErrors { field message }
-            }
-          }`
-        : intent === "deactivate"
+      const mutation =
+        intent === "activate"
           ? `#graphql
-            mutation Deactivate($id: ID!) {
-              discountAutomaticDeactivate(id: $id) {
+            mutation Activate($id: ID!) {
+              discountAutomaticActivate(id: $id) {
                 userErrors { field message }
               }
             }`
-          : `#graphql
-            mutation Delete($id: ID!) {
-              discountAutomaticDelete(id: $id) {
-                userErrors { field message }
-              }
-            }`;
+          : intent === "deactivate"
+            ? `#graphql
+              mutation Deactivate($id: ID!) {
+                discountAutomaticDeactivate(id: $id) {
+                  userErrors { field message }
+                }
+              }`
+            : `#graphql
+              mutation Delete($id: ID!) {
+                discountAutomaticDelete(id: $id) {
+                  userErrors { field message }
+                }
+              }`;
 
-    const resp = await admin.graphql(mutation, { variables: { id } });
-    const json = await resp.json();
+      const key =
+        intent === "activate"
+          ? "discountAutomaticActivate"
+          : intent === "deactivate"
+            ? "discountAutomaticDeactivate"
+            : "discountAutomaticDelete";
 
-    const key =
-      intent === "activate"
-        ? "discountAutomaticActivate"
-        : intent === "deactivate"
-          ? "discountAutomaticDeactivate"
-          : "discountAutomaticDelete";
+      const data = await adminGraphqlJson<any>(admin, mutation, { id });
+      const userErrors = data?.[key]?.userErrors ?? [];
 
-    const userErrors = json?.data?.[key]?.userErrors ?? [];
-    if (userErrors.length > 0) {
-      return { ok: false, error: userErrors.map((e: any) => e.message).join("; ") };
+      if (userErrors.length > 0) {
+        return { ok: false, error: userErrors.map((e: any) => e.message).join("; ") };
+      }
+
+      return { ok: true };
     }
 
-    return { ok: true };
+    return { ok: false, error: "Unknown action." };
+  } catch (e) {
+    return { ok: false, error: toErrorString(e) };
   }
-
-  return { ok: false, error: "Unknown action." };
 };
 
 export default function DiscountsPage() {
@@ -318,8 +431,9 @@ export default function DiscountsPage() {
     <s-page heading="Discounts">
       <s-section heading="Create a Basket Booster discount">
         <s-paragraph>
-          Create and manage your Basket Booster discounts directly from this app. Configuration is stored on the discount
-          node as <code>custom/function-configuration</code>.
+          Create and manage your Basket Booster discounts directly from this app.
+          Configuration is stored on the discount node as{" "}
+          <code>custom/function-configuration</code>.
         </s-paragraph>
 
         {topMsg ? (
@@ -335,7 +449,7 @@ export default function DiscountsPage() {
           </div>
         ) : null}
 
-        {data.ok === false ? (
+        {data?.ok === false ? (
           <div
             style={{
               margin: "12px 0",
@@ -344,7 +458,11 @@ export default function DiscountsPage() {
               background: "#fff4e5",
             }}
           >
-            {data.error}
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>Discount manager isn’t ready yet.</div>
+            <div style={{ whiteSpace: "pre-wrap" }}>{data.error}</div>
+            <div style={{ marginTop: 10, fontSize: 12, color: "#666" }}>
+              If this mentions scopes, ensure your app has <code>read_discounts</code> / <code>write_discounts</code> and reinstall.
+            </div>
           </div>
         ) : null}
 
@@ -375,7 +493,9 @@ export default function DiscountsPage() {
                 style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
               />
               {actionData?.errors?.triggerBE ? (
-                <div style={{ color: "#b42318", marginTop: 6 }}>{actionData.errors.triggerBE}</div>
+                <div style={{ color: "#b42318", marginTop: 6 }}>
+                  {actionData.errors.triggerBE}
+                </div>
               ) : null}
             </div>
 
@@ -395,7 +515,9 @@ export default function DiscountsPage() {
                 style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
               />
               {actionData?.errors?.amountPerTrigger ? (
-                <div style={{ color: "#b42318", marginTop: 6 }}>{actionData.errors.amountPerTrigger}</div>
+                <div style={{ color: "#b42318", marginTop: 6 }}>
+                  {actionData.errors.amountPerTrigger}
+                </div>
               ) : null}
             </div>
 
@@ -415,7 +537,9 @@ export default function DiscountsPage() {
                 style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
               />
               {actionData?.errors?.maxDiscount ? (
-                <div style={{ color: "#b42318", marginTop: 6 }}>{actionData.errors.maxDiscount}</div>
+                <div style={{ color: "#b42318", marginTop: 6 }}>
+                  {actionData.errors.maxDiscount}
+                </div>
               ) : null}
             </div>
 
@@ -438,12 +562,24 @@ export default function DiscountsPage() {
             >
               <thead>
                 <tr>
-                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ddd" }}>Title</th>
-                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ddd" }}>Status</th>
-                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ddd" }}>Trigger</th>
-                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ddd" }}>Amount</th>
-                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ddd" }}>Cap</th>
-                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ddd" }}>Actions</th>
+                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ddd" }}>
+                    Title
+                  </th>
+                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ddd" }}>
+                    Status
+                  </th>
+                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ddd" }}>
+                    Trigger
+                  </th>
+                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ddd" }}>
+                    Amount
+                  </th>
+                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ddd" }}>
+                    Cap
+                  </th>
+                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ddd" }}>
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody>
