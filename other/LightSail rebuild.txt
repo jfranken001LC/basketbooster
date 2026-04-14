@@ -4,8 +4,6 @@ git checkout main
 
 git reset --hard origin/main
 
-git log --oneline --decorate --graph --all
-
 ===
 
 TROUBLESHOOTING

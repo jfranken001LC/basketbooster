@@ -196,7 +196,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           automaticAppDiscount: {
             title,
             functionHandle: FUNCTION_HANDLE,
-            discountClasses: ["PRODUCT"],
+            discountClasses: ["ORDER"],
             startsAt: new Date().toISOString(),
             combinesWith: {
               orderDiscounts: false,
