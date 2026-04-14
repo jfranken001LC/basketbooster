@@ -92,7 +92,9 @@ export default function App() {
           Home
         </Link>
         <Link to={to("/app/discounts")}>Discounts</Link>
-        <Link to={to("/app/additional")}>Additional page</Link>
+        <Link to={to("/app/support")}>Support</Link>
+        <Link to={to("/app/privacy")}>Privacy</Link>
+        <Link to={to("/app/terms")}>Terms</Link>
       </NavMenu>
 
       <div style={{ minHeight: "100vh" }}>

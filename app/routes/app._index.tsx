@@ -20,6 +20,9 @@ export default function Index() {
   const location = useLocation();
   const embeddedSearch = buildEmbeddedSearch(location.search);
   const discountsHref = `/app/discounts${embeddedSearch}`;
+  const supportHref = `/app/support${embeddedSearch}`;
+  const privacyHref = `/app/privacy${embeddedSearch}`;
+  const termsHref = `/app/terms${embeddedSearch}`;
 
   return (
     <s-page>
@@ -63,7 +66,7 @@ export default function Index() {
 
       <s-section>
         <s-paragraph>
-          Need help? Visit <a href="/support">Support</a>. View <a href="/privacy">Privacy</a> and <a href="/terms">Terms</a>.
+          Need help? Visit <a href={supportHref}>Support</a>. View <a href={privacyHref}>Privacy</a> and <a href={termsHref}>Terms</a>.
         </s-paragraph>
       </s-section>
 
