@@ -1,16 +1,12 @@
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { NavMenu } from "@shopify/app-bridge-react";
-import { boundary } from "@shopify/shopify-app-react-router/server";
-import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
 import {
   Link,
   Outlet,
   isRouteErrorResponse,
   useLocation,
   useRouteError,
-  useLoaderData,
 } from "react-router";
-import { authenticate } from "../shopify.server";
 
 /**
  * For embedded apps, Shopify needs stable query params (host/shop/embedded).
@@ -29,22 +25,11 @@ function buildEmbeddedSearch(search: string): string {
   return qs ? `?${qs}` : "";
 }
 
-/**
- * Protect all embedded routes (/app/*) and ensure App Bridge headers are applied.
- * This avoids "static landing page" behavior in review and ensures a merchant-
- * authenticated session is always present before hitting UI routes.
- */
-export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
-  return { apiKey: process.env.SHOPIFY_API_KEY || "" };
-};
-
-export const headers: HeadersFunction = (headersArgs) => {
-  return boundary.headers(headersArgs);
-};
-
 export default function App() {
-  const { apiKey } = useLoaderData<typeof loader>();
+  // Keep this client-side, same as BasketBooster v1.
+  // This avoids server-side auth gating on simple document navigations
+  // and keeps Shopify Admin left-nav routing stable.
+  const apiKey = import.meta.env.VITE_SHOPIFY_API_KEY as string | undefined;
   const location = useLocation();
 
   if (!apiKey) {
@@ -86,15 +71,21 @@ export default function App() {
   const to = (pathname: string) => `${pathname}${embeddedSearch}`;
 
   return (
-    <AppProvider embedded apiKey={apiKey}>
+    <AppProvider isEmbeddedApp apiKey={apiKey}>
       <NavMenu>
         <Link to={to("/app")} rel="home">
           Home
         </Link>
-        <Link to={to("/app/discounts")}>Discounts</Link>
-        <Link to={to("/app/support")}>Support</Link>
-        <Link to={to("/app/privacy")}>Privacy</Link>
-        <Link to={to("/app/terms")}>Terms</Link>
+        {/*
+          IMPORTANT:
+          - Do NOT label internal pages "Discounts" (confuses with Shopify Admin /discounts).
+          - Keep policy/help pages as top-level routes (/support, /privacy, /terms)
+            so they work even when the embedded app session is not established.
+        */}
+        <Link to={to("/app/discounts")}>Discount Manager</Link>
+        <Link to={to("/support")}>Support</Link>
+        <Link to={to("/privacy")}>Privacy</Link>
+        <Link to={to("/terms")}>Terms</Link>
       </NavMenu>
 
       <div style={{ minHeight: "100vh" }}>

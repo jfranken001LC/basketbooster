@@ -20,16 +20,13 @@ export default function Index() {
   const location = useLocation();
   const embeddedSearch = buildEmbeddedSearch(location.search);
   const discountsHref = `/app/discounts${embeddedSearch}`;
-  const supportHref = `/app/support${embeddedSearch}`;
-  const privacyHref = `/app/privacy${embeddedSearch}`;
-  const termsHref = `/app/terms${embeddedSearch}`;
 
   return (
     <s-page>
       <s-section heading="Manage Basket Booster discounts">
         <s-paragraph>
-          Use the <strong>Discounts</strong> tab in the app navigation to create, activate/deactivate, and remove Basket
-          Booster discounts from inside the app.
+          Use <strong>Discount Manager</strong> to create, activate/deactivate, and remove Basket Booster discounts from
+          inside the app.
         </s-paragraph>
         <s-link href={discountsHref}>Open Discount Manager</s-link>
       </s-section>
@@ -66,7 +63,7 @@ export default function Index() {
 
       <s-section>
         <s-paragraph>
-          Need help? Visit <a href={supportHref}>Support</a>. View <a href={privacyHref}>Privacy</a> and <a href={termsHref}>Terms</a>.
+          Need help? Visit <a href="/support">Support</a>. View <a href="/privacy">Privacy</a> and <a href="/terms">Terms</a>.
         </s-paragraph>
       </s-section>
 
