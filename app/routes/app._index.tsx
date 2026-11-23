@@ -1,25 +1,6 @@
-import { useLocation } from "react-router";
-
-/**
- * Keep embedded params (host/shop/embedded) when navigating.
- */
-function buildEmbeddedSearch(search: string): string {
-  const params = new URLSearchParams(search);
-  const keep = new URLSearchParams();
-
-  for (const key of ["embedded", "host", "shop", "locale"]) {
-    const v = params.get(key);
-    if (v) keep.set(key, v);
-  }
-
-  const qs = keep.toString();
-  return qs ? `?${qs}` : "";
-}
+import { Link } from "react-router";
 
 export default function Index() {
-  const location = useLocation();
-  const embeddedSearch = buildEmbeddedSearch(location.search);
-  const discountsHref = `/app/discounts${embeddedSearch}`;
 
   return (
     <s-page>
@@ -28,7 +9,7 @@ export default function Index() {
           Use <strong>Discount Manager</strong> to create, activate/deactivate, and remove Basket Booster discounts from
           inside the app.
         </s-paragraph>
-        <s-link href={discountsHref}>Open Discount Manager</s-link>
+        <Link to="/app/discounts">Open Discount Manager</Link>
       </s-section>
 
       <s-section heading="Bottle Equivalent Discounts">
@@ -41,7 +22,7 @@ export default function Index() {
       <s-section heading="Quick setup">
         <s-paragraph>
           1) Ensure each product/variant has an integer metafield <strong>loyalty.bottle_equivalent</strong> (for example:
-          250&nbsp;mL=1, 500&nbsp;mL=2, 2&nbsp;L tins=0).
+          250&nbsp;mL=1, 500&nbsp;mL=2, 2&nbsp;L tins=4).
         </s-paragraph>
         <s-paragraph>
           2) In Shopify Admin, create a discount and select the{" "}
