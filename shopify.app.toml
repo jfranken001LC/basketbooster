@@ -1,6 +1,6 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "c24e58a5c830c7a3eda14ae5d6f8f6da"
+client_id = "63fca6eb9dd47c18f39e2eaf9f79e96e"
 name = "Basket Booster Discounts"
 application_url = "https://app.basketbooster.ca"
 embedded = true
